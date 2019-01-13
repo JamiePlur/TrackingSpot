@@ -141,7 +141,74 @@ def track_all_objs(frame):
     return leaving_objs
 
 
-               
+def Count(dir):
+    cap = cv2.VideoCapture(dir)
+    count = 0    
+    ind = 0
+    last_frame = None
+
+    while(1):
+        
+        #从视频流取帧
+        ok, frame = cap.read()
+        if not ok:
+            break
+        ind += 1
+        frame = imutils.resize(frame, width = 500)
+        
+        #异常帧检测
+        def is_abnormal_frame(frame, last_frame):
+            diff = cv2.absdiff(frame, last_frame).sum() // 1e5
+            if diff > 20:
+                return True
+            return False
+        
+        if last_frame is None:
+            last_frame = frame
+        if is_abnormal_frame(frame, last_frame):
+            continue
+        last_frame = frame
+        
+        #追踪所有的目标，并统计将要离开的目标
+        leaving_objs = track_all_objs(frame)
+        
+        #当目标离开时，对其计数
+        count += len(leaving_objs)
+                 
+        #检测新的目标            
+        new_objs = detect_new_objects(frame)
+        
+        #初始化新的目标
+        def init_new_obj(frame, new_obj):
+            tracker = create_tracker()
+            tracker.init(frame, new_obj)
+            trackers.append(tracker)
+            objs.append(new_obj)
+            move_state = {
+                    'entry':new_obj,
+                    'exit':None,
+                    'distance':0,
+                    'time':0
+                    }
+            move_states.append(move_state)
+            
+        for new_obj in new_objs:
+            init_new_obj(frame, new_obj)
+
+        #根据运动状态，过滤一些目标
+        for i, move_state in enumerate(move_states):
+            if ind > 10 and ind % 10 == 1:           
+                if move_state['distance'] < 5:
+                    del trackers[i]
+                    del objs[i]
+                    del move_states[i]
+                else:
+                    move_states[i]['distance'] = 0
+    return count
+                   
+            
+
+
 
 if __name__ == "__main__":
     
