@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import cv2
 import imutils
 import copy
+from FrameHelper import Frame
 
 class Counter():
     
@@ -12,14 +13,45 @@ class Counter():
     
     def detect(self, frame):
         
-        bboxes = self.detect_bboxes(frame)
-        bboxes = self.nms(bboxes)
-        print(bboxes)
+        bboxes = self._detect_bboxes_by_dp(frame)
+        bboxes = self._filter(bboxes, frame)
+        print("在这一帧检测到的新目标有：", bboxes)
         for bbox in bboxes:
-            obj = TrackedObj(bbox)
+            obj = TrackedObj(bbox, frame)
             self.objs.append(obj)
+        print("共有目标：", [obj.bbox for obj in self.objs])
     
-    def detect_bboxes(self, frame):
+    def _filter_by_shape(self, frame):
+        
+        bboxes = []
+
+        f = copy.deepcopy(frame)
+        f.data = imutils.resize(f.data, width = 500)
+        # first erode then dilate
+        # to remoce small noise
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(5,5))
+        d = cv2.erode(f.data, kernel, iterations = 5)
+        d = cv2.dilate(d, kernel, iterations= 5)
+        d = cv2.cvtColor(d, cv2.COLOR_BGR2GRAY)
+        # convert to binary img
+        # and find contours
+        ret, thresh = cv2.threshold(d, 127, 255, 0)
+        fcnts = cv2.findContours(d, cv2.RETR_TREE,
+                                cv2.CHAIN_APPROX_SIMPLE)
+        fcnts= imutils.grab_contours(fcnts)
+
+        for c in fcnts:
+            if cv2.contourArea(c) < 30:
+                continue
+            bbox = cv2.boundingRect(c)
+            bboxes.append(bbox)
+
+        # print("轮廓数为",len(bboxes))
+        # f.show()
+
+        return bboxes 
+
+    def _detect_bboxes_by_dp(self, frame):
         
         bboxes = []
         
@@ -29,47 +61,89 @@ class Counter():
             r, j = dp
             f.draw_point(r, j, frame.rmax)
         
-        
-        f = cv2.dilate(f.frame, None, iterations= 1)
+        f = cv2.dilate(f.data, None, iterations= 3)
         gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
-        ret, thresh = cv2.threshold(gray,127,255,0)
+        ret, thresh = cv2.threshold(gray, 127, 255, 0)
         
         cnts = cv2.findContours(thresh, cv2.RETR_TREE,
                                 cv2.CHAIN_APPROX_SIMPLE)
         cnts = imutils.grab_contours(cnts)
-        
+
         for c in cnts:
             bbox = cv2.boundingRect(c)
-            frame.show_bbox(bbox)
+            # frame.draw_bbox(bbox)
             bboxes.append(bbox) 
         
         return bboxes
     
-    def nms(self, bboxes):
+    def _filter(self, bboxes, frame):
         
         b = []
+
         for bbox in bboxes:
             ok = True
+
             for obj in self.objs:
                 qbox = obj.bbox
-                if self.bbox_overlap(bbox, qbox) > 0.6:
+                if self.bbox_overlap(bbox, qbox) > 0.5:
                     ok = False
                     break
+                
+            x, y, w, h = bbox
+            if w < 10 or h < 10: #不能太小
+                ok = False
+            if w > 30 or h > 30:  #不能太大
+                ok = False
             
+            data = frame.clip_bbox(bbox)
+            f = Frame(data = data, rmax = frame.rmax)
+            c = self._filter_by_shape(f)
+
+            if len(c) is not 2:
+                ok = False
+
             if ok:
+                print("检测成功，联通域为", len(c))
                 b.append(bbox)
+        
         
         return b
                 
-    
     def track(self, frame):
         
-        leaving_obj_num = 0
+        leaving_objs = []
+
+        for i, obj in enumerate(self.objs):
+            ok = obj.update(frame)
+            if not ok:
+                leaving_objs.append(obj)
+                self.objs.remove(obj)
+            if ok:
+                if self._is_repeated(obj):
+                    print("目标疑似重复，删除")
+                    self.objs.remove(obj)
+                    
+                print("目标{}跟踪成功".format(obj.bbox))
+
+                
+        leaving_obj_num = len(leaving_objs)
+        
         for obj in self.objs:
-            leaving_obj_num += obj.update()
+            frame.draw_bbox(obj.bbox)
+        
+        for obj in leaving_objs:
+            frame.draw_bbox(obj.bbox, color = "red")
         
         return leaving_obj_num
-
+    
+    def _is_repeated(self, obj):
+        
+        for qobj in [o for o in self.objs if o is not obj]:
+            overlap = self.bbox_overlap(obj.bbox, qobj.bbox)
+            if overlap > 0.7:
+                return True
+        return False
+        
     def bbox_overlap(self, box, query_box):
 
         overlap = 0
@@ -99,12 +173,21 @@ class Counter():
 
 class TrackedObj:
     
-    def __init__(self, bbox):
+    create_tracker = cv2.TrackerCSRT_create
+    
+    def __init__(self, bbox, frame):
         self.bbox = bbox
-    
-    
-    def update(self):
-        pass
+        tracker = self.create_tracker()
+        tracker.init(frame.data, bbox)
+        self.tracker = tracker
+        
+    def update(self, frame):
+        
+        ok, bbox = self.tracker.update(frame.data)
+        if ok:
+            self.bbox = bbox
+        return ok
+        
     
     
     

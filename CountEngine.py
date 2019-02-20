@@ -1,5 +1,6 @@
 from FrameHelper import FrameHelper    
 from Counter import Counter
+import cv2
 
 class State:
     
@@ -69,7 +70,8 @@ class CountingEngine:
         self.cnt = 0
 
 
-    def run(self):
+
+    def run(self, save = True):
         
         sm = CountingStateMachine()
         fh = self.frame_helper
@@ -85,8 +87,14 @@ class CountingEngine:
             count_handler = getattr(self, "count_" + state + "_frame")
             self.cnt += count_handler(frame)
             
-            frame.show()        
-            print("第{}帧的diff总和为{}".format(fh.frame_ind, frame.dynamic_point_num))
+            frame.show(self.cnt)
+            
+            if save:            
+                fh.write()
+            
+            print("第{}帧的动点数为{}".format(fh.frame_ind, frame.dynamic_point_num))
+            print("计数：", self.cnt)
+
             
         fh.close()
 
@@ -95,29 +103,33 @@ class CountingEngine:
 
         fh = self.frame_helper
         fh.update_bg(use_all_points = True)
-              
-#        self.counter.track(frame)
-#        print(fh.bg.data)0
+        # remove all the objs state is static
+        self.counter.objs = []
+        
+#        print(fh.bg.data)
         
         return 0
         
     
     def count_dynamic_frame(self, frame):
         
+        fh = self.frame_helper
+        fh.update_bg(use_all_points = False)
+        
         self.counter.detect(frame)
         
-#        cnt = self.counter.track(frame)        
+        cnt = self.counter.track(frame)        
         
-        return 0
+        return cnt
           
       
 
               
 if __name__ == '__main__':
     import os
-    ind = 17
+    ind = 10
     dirs = os.listdir("data")
     dir = os.path.join("data", dirs[ind])
     sm = CountingEngine(dir)
-    sm.run()
+    sm.run(save = False)
 
