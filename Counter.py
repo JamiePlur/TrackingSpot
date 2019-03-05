@@ -30,8 +30,8 @@ class Counter():
         # first erode then dilate
         # to remoce small noise
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(5,5))
-        d = cv2.erode(f.data, kernel, iterations = 5)
-        d = cv2.dilate(d, kernel, iterations= 5)
+        d = cv2.erode(f.data, kernel, iterations = 7)
+        # d = cv2.dilate(d, kernel, iterations= 1)
         d = cv2.cvtColor(d, cv2.COLOR_BGR2GRAY)
         # convert to binary img
         # and find contours
@@ -41,15 +41,28 @@ class Counter():
         fcnts= imutils.grab_contours(fcnts)
 
         for c in fcnts:
-            if cv2.contourArea(c) < 30:
+
+            if cv2.contourArea(c) < 200:
                 continue
             bbox = cv2.boundingRect(c)
+            # print(bbox)           
+            if self._bbox_out_of_bound(bbox, 500):
+                continue
             bboxes.append(bbox)
+            f.draw_bbox(bbox)
 
         # print("轮廓数为",len(bboxes))
         # f.show()
 
         return bboxes 
+
+    def _bbox_out_of_bound(self, bbox, bound):
+        if bbox[0] <= 0 or bbox[1] <= 0:
+            return True
+        if bbox[2] + bbox[0] >= bound \
+            or bbox[3] + bbox[1] >= bound:
+            return True
+        return False
 
     def _detect_bboxes_by_dp(self, frame):
         
@@ -61,19 +74,18 @@ class Counter():
             r, j = dp
             f.draw_point(r, j, frame.rmax)
         
-        f = cv2.dilate(f.data, None, iterations= 3)
-        gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+        f.data = cv2.dilate(f.data, None, iterations= 3)
+        gray = cv2.cvtColor(f.data, cv2.COLOR_BGR2GRAY)
         ret, thresh = cv2.threshold(gray, 127, 255, 0)
-        
         cnts = cv2.findContours(thresh, cv2.RETR_TREE,
                                 cv2.CHAIN_APPROX_SIMPLE)
         cnts = imutils.grab_contours(cnts)
-
         for c in cnts:
             bbox = cv2.boundingRect(c)
-            # frame.draw_bbox(bbox)
+            f.draw_bbox(bbox)
             bboxes.append(bbox) 
         
+        f.show(win = 'img2')
         return bboxes
     
     def _filter(self, bboxes, frame):

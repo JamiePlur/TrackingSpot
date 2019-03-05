@@ -1,77 +1,72 @@
-from FrameHelper import FrameHelper    
-from Counter import Counter
 import cv2
 
-class State:
-    
+from Counter import Counter
+from FrameHelper import FrameHelper
+
+
+class State: 
     static_frame_in_row = 0
-    
+
 
 class StaticState(State):
-    
+
     def get_state(self):
         return "static"
-    
+   
     def update(self, sm):
-        if sm.dynamic_point_num > 10:        #当动点个数大于一定数量则转化为动态
+        if sm.dynamic_point_num > 10:        # 当动点个数大于一定数量则转化为动态
             sm.change_state(DynamicState())
             State.static_frame_in_row = 0
             print("convert to dynamic state")
             return self.get_state()
         print("now is static state")
-        return self.get_state()
-            
+        return self.get_state()          
+
 
 class DynamicState(State):
-      
+     
     def get_state(self):
         return "dynamic"
-    
+   
     def update(self, sm):
         if sm.dynamic_point_num < 4:
             State.static_frame_in_row += 1
         else:
             State.static_frame_in_row = 0
-            
+           
         if State.static_frame_in_row >= 5: #连续5帧的动点个数小于一定数量则转化为静态
             sm.change_state(StaticState())
             print("convert to static state")
             return self.get_state()
         print("now is dynamic state")
         return self.get_state()
-    
-    
+   
+   
 class CountingStateMachine:
-    
-    state = StaticState()    
+    state = StaticState()
     dynamic_point_num = 0
     
     def change_state(self, state):
         self.state = state
-        
+    
     def update(self, frame):
-        self.dynamic_point_num = frame.dynamic_point_num 
+        self.dynamic_point_num = frame.dynamic_point_num
         s = self.state.update(self)
         return s
     
     def get_state(self):
         return self.state.get_state()
     
-    
-    
+      
 class CountingEngine:
-    
-
-    
+       
     def __init__(self, dir):
 
         self.frame_helper = FrameHelper(dir)
         self.counter = Counter()
         self.cnt = 0
 
-
-
-    def run(self, save = True):
+    def run(self , save = True):
         
         sm = CountingStateMachine()
         fh = self.frame_helper
@@ -81,6 +76,10 @@ class CountingEngine:
             ok, frame = fh.read()
             if not ok:
                 break
+                
+            if ok is 1:
+                print("skip this frame")
+                continue
 
             state = sm.update(frame)
 
@@ -104,7 +103,6 @@ class CountingEngine:
         fh = self.frame_helper
         fh.update_bg(use_all_points = True)
         # remove all the objs state is static
-        self.counter.objs = []
         
 #        print(fh.bg.data)
         
@@ -127,9 +125,8 @@ class CountingEngine:
               
 if __name__ == '__main__':
     import os
-    ind = 10
+    ind = 1
     dirs = os.listdir("data")
     dir = os.path.join("data", dirs[ind])
     sm = CountingEngine(dir)
     sm.run(save = False)
-
