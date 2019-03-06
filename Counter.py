@@ -15,11 +15,11 @@ class Counter():
         
         bboxes = self._detect_bboxes_by_dp(frame)
         bboxes = self._filter(bboxes, frame)
-        print("在这一帧检测到的新目标有：", bboxes)
+        # print("new objects ：", bboxes)
         for bbox in bboxes:
             obj = TrackedObj(bbox, frame)
             self.objs.append(obj)
-        print("共有目标：", [obj.bbox for obj in self.objs])
+        # print("all objects：", [obj.bbox for obj in self.objs])
     
     def _filter_by_shape(self, frame):
         
@@ -51,7 +51,7 @@ class Counter():
             bboxes.append(bbox)
             f.draw_bbox(bbox)
 
-        # print("轮廓数为",len(bboxes))
+        # print("number of cnts:",len(bboxes))
         # f.show()
 
         return bboxes 
@@ -102,9 +102,9 @@ class Counter():
                     break
                 
             x, y, w, h = bbox
-            if w < 10 or h < 10: #不能太小
+            if w < 10 or h < 10:
                 ok = False
-            if w > 30 or h > 30:  #不能太大
+            if w > 30 or h > 30:
                 ok = False
             
             data = frame.clip_bbox(bbox)
@@ -115,7 +115,7 @@ class Counter():
                 ok = False
 
             if ok:
-                print("检测成功，联通域为", len(c))
+                # print("检测成功，联通域为", len(c))
                 b.append(bbox)
         
         
@@ -132,11 +132,9 @@ class Counter():
                 self.objs.remove(obj)
             if ok:
                 if self._is_repeated(obj):
-                    print("目标疑似重复，删除")
+                    print("目标{}疑似重复，删除".format(obj.bbox))
                     self.objs.remove(obj)
                     
-                print("目标{}跟踪成功".format(obj.bbox))
-
                 
         leaving_obj_num = len(leaving_objs)
         

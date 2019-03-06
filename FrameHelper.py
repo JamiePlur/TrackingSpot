@@ -44,7 +44,7 @@ class FrameHelper:
             dr_bg = abs(r_bg - r).min()
             if dr_bg > 200:
                 frame.dynamic_point_num += 1
-                #                self.frame.draw_point(r, theta, self.rmax, p = 10 , color = 'red')
+                #self.frame.draw_point(r, theta, self.rmax, p = 10 , color = 'red')
                 frame.dpoints.append((r, j))
 
             frame.draw_point(r, j, self.rmax)
@@ -52,9 +52,10 @@ class FrameHelper:
 
         self.frame_ind += 1
 
-        # detect obnormal frame
+        # detect abnormal frame
         if frame.dynamic_point_num - self.frame.dynamic_point_num > 50:
-            print("检测到异常帧!")
+            print("abnormal frame detected!!!")
+            print("frame ind:", self.frame_ind)
             return 1, self.frame
 
         self.frame = frame

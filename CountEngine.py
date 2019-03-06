@@ -125,7 +125,7 @@ class CountingEngine:
               
 if __name__ == '__main__':
     import os
-    ind = 1
+    ind = 22
     dirs = os.listdir("data")
     dir = os.path.join("data", dirs[ind])
     sm = CountingEngine(dir)
