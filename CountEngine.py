@@ -1,132 +1,199 @@
 import cv2
 
 from Counter import Counter
-from FrameHelper import FrameHelper
+from FrameHelper import FrameHelper, Frame
+import numpy as np
 
 
-class State: 
-    static_frame_in_row = 0
+class State:
+
+    def __init__(self, count_machine):
+        self.count_machine = count_machine
+        self.frame_helper = count_machine.fh
 
 
-class StaticState(State):
+class InitialState(State):
 
-    def get_state(self):
-        return "static"
-   
-    def update(self, sm):
-        if sm.dynamic_point_num > 10:        # 当动点个数大于一定数量则转化为动态
-            sm.change_state(DynamicState())
-            State.static_frame_in_row = 0
-            print("convert to dynamic state")
-            return self.get_state()
-        print("now is static state")
-        return self.get_state()          
+    def __init__(self, count_machine, l=5):
+        super().__init__(count_machine)
+        self.reset(l)
+        self.bg_init_data = [[] for _ in range(250)]
 
+    def reset(self, l=5):
+        self.bg_init_data = [[] for _ in range(250)]
+        self.l = l
 
-class DynamicState(State):
-     
-    def get_state(self):
-        return "dynamic"
-   
-    def update(self, sm):
-        if sm.dynamic_point_num < 4:
-            State.static_frame_in_row += 1
-        else:
-            State.static_frame_in_row = 0
-           
-        if State.static_frame_in_row >= 5: #连续5帧的动点个数小于一定数量则转化为静态
-            sm.change_state(StaticState())
-            print("convert to static state")
-            return self.get_state()
-        print("now is dynamic state")
-        return self.get_state()
-   
-   
-class CountingStateMachine:
-    state = StaticState()
-    dynamic_point_num = 0
-    
-    def change_state(self, state):
-        self.state = state
-    
-    def update(self, frame):
-        self.dynamic_point_num = frame.dynamic_point_num
-        s = self.state.update(self)
+    def update(self):
+        s = "init"
+        dp_num = self.frame_helper.frame.dynamic_point_num()
+        last_dp_num = self.frame_helper.last_frame.dynamic_point_num()
+        if dp_num - last_dp_num > 50:
+            s = "abnormal"
+            return s
+        self.l -= 1
+        if self.l < 0:
+            # change to normal state
+            cm = self.count_machine
+            cm.change_state(cm.normal_state)
+            print("convert to normal state")
         return s
-    
-    def get_state(self):
-        return self.state.get_state()
-    
-      
-class CountingEngine:
-       
-    def __init__(self, dir):
 
-        self.frame_helper = FrameHelper(dir)
-        self.counter = Counter()
+    def handle(self):
+        fh = self.frame_helper
+        points = fh.frame.points
+
+        for r, j, _ in points:
+            self.bg_init_data[j].append(r)
+        if self.l is 0:
+            data = self.init_bg3(np.array(self.bg_init_data))
+            fh.init_bg(data)
+            # test bg
+            frame = Frame(500, 500)
+            for i, r in enumerate(data):
+                frame.append_point(r, i)
+            for point in frame.points:
+                fh._draw_point(frame, point)
+            cv2.imshow('test bg', frame.data)
+        return 0
+
+    def init_bg(self, data):
+        median = np.median(data, axis=1)
+        grad = np.zeros([250])
+        for i in range(250):
+            grad_l = abs(median[i-1]-median[i]) if i > 0 else 0
+            grad_r = abs(median[i+1]-median[i]) if i < 249 else 0
+            grad[i] = grad_l + grad_r
+
+        data = median
+        dp_ind = np.where(grad > 100)[0].tolist()
+        if len(dp_ind) is 250:
+            dp_ind.pop()
+        while(len(dp_ind) > 0):
+            for ind in dp_ind:
+                if ind + 1 < 250 and ind + 1 not in dp_ind:
+                    data[ind] = data[ind + 1]
+                    dp_ind.remove(ind)
+                    break
+                if ind - 1 >= 0 and ind - 1 not in dp_ind:
+                    data[ind] = data[ind - 1]
+                    dp_ind.remove(ind)
+                    break
+        return data
+
+    def init_bg3(self, data):
+        data_bg = data
+        std = np.std(data, axis=1)
+        dp_ind = np.where(std > 50)[0].tolist()
+        if len(dp_ind) is 250:
+            dp_ind.pop()
+        while(len(dp_ind) > 0):
+            for ind in dp_ind:
+                if ind + 1 < 250 and ind + 1 not in dp_ind:
+                    data_bg[ind] = data_bg[ind + 1]
+                    dp_ind.remove(ind)
+                    break
+                if ind - 1 >= 0 and ind - 1 not in dp_ind:
+                    data_bg[ind] = data_bg[ind - 1]
+                    dp_ind.remove(ind)
+                    break
+        return data_bg.mean(axis=1, dtype=int)
+
+    def init_bg2(self, data):
+        data_bg = None
+        for r in range(data.shape[0]):
+            # remove max value and min value
+            d = np.sort(data[r, :])
+            d = np.delete(d, [0, data.shape[1] - 1])
+            data_bg = np.vstack([data_bg, d]) if r > 0 else d
+        # detect dp
+        std = np.std(data_bg, axis=1)
+        dp_ind = np.where(std > 200)[0].tolist()
+        # find the nearest sp for each dp
+        if len(dp_ind) is 250:
+            dp_ind.pop()
+        while(len(dp_ind) > 0):
+            for ind in dp_ind:
+                if ind + 1 < 250 and ind + 1 not in dp_ind:
+                    data_bg[ind] = data_bg[ind + 1]
+                    dp_ind.remove(ind)
+                    break
+                if ind - 1 >= 0 and ind - 1 not in dp_ind:
+                    data_bg[ind] = data_bg[ind - 1]
+                    dp_ind.remove(ind)
+                    break
+        return data_bg.mean(axis=1, dtype=int)
+
+
+class NormalState(State):
+
+    def __init__(self, count_machine):
+        super().__init__(count_machine)
+        self.abnormal_frame_in_row = 0
+
+    def update(self):
+        s = "normal"
+        dp_num = self.frame_helper.frame.dynamic_point_num()
+        last_dp_num = self.frame_helper.last_frame.dynamic_point_num()
+        if dp_num - last_dp_num > 50:
+            self.abnormal_frame_in_row += 1
+            s = "abnormal"
+        else:
+            self.abnormal_frame_in_row = 0
+        if self.abnormal_frame_in_row >= 5:
+            # change to initial state
+            cm = self.count_machine
+            cm.change_state(cm.initial_state)
+            print("convert to initial state")
+        return s
+
+    def handle(self):
+        return 0
+
+
+class CountingMachine:
+
+    def __init__(self, dir):
+        self.fh = FrameHelper(dir)
+        self.initial_state = InitialState(self)
+        self.normal_state = NormalState(self)
+        self.state = self.initial_state
         self.cnt = 0
 
-    def run(self , save = True):
-        
-        sm = CountingStateMachine()
-        fh = self.frame_helper
-
-        
+    def run(self, display=True, save=False):
         while(1):
-            ok, frame = fh.read()
+            ok, frame = self.fh.read()
             if not ok:
                 break
-                
-            if ok is 1:
-                print("skip this frame")
+
+            s = self.state.update()
+            if s is "abnormal":
+                print("skip this frame!")
                 continue
 
-            state = sm.update(frame)
+            self.cnt += self.state.handle()
 
-            count_handler = getattr(self, "count_" + state + "_frame")
-            self.cnt += count_handler(frame)
-            
-            frame.show(self.cnt)
-            
-            if save:            
-                fh.write()
-            
-            print("第{}帧的动点数为{}".format(fh.frame_ind, frame.dynamic_point_num))
-            print("计数：", self.cnt)
+            if display:
+                self.display(self.cnt)
 
-            
-        fh.close()
+            if save:
+                self.fh.write()
 
-    
-    def count_static_frame(self, frame):
+        self.fh.close()
 
-        fh = self.frame_helper
-        fh.update_bg(use_all_points = True)
-        # remove all the objs state is static
-        
-#        print(fh.bg.data)
-        
-        return 0
-        
-    
-    def count_dynamic_frame(self, frame):
-        
-        fh = self.frame_helper
-        fh.update_bg(use_all_points = False)
-        
-        self.counter.detect(frame)
-        
-        cnt = self.counter.track(frame)        
-        
-        return cnt
-          
-      
+    def display(self, cnt=None, win='img'):
+        self.fh.display(cnt, win)
+        print("第{}帧的动点数为{}".format(self.fh.frame_ind,
+                                         self.fh.frame.dynamic_point_num()))
+        print("计数：", cnt)
 
-              
+    def change_state(self, state):
+        self.state = state
+
+
 if __name__ == '__main__':
     import os
     ind = 22
     dirs = os.listdir("data")
     dir = os.path.join("data", dirs[ind])
-    sm = CountingEngine(dir)
-    sm.run(save = False)
+    ce = CountingMachine(dir)
+    ce.run()
