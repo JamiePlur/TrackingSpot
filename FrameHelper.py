@@ -38,29 +38,17 @@ class FrameHelper:
     def init_bg(self, data):
         self.bg = BackGround(data)
 
-    def display(self, cnt=None, win='img'):
-        frame = copy.deepcopy(self.frame)
-        for point in frame.points:
-            self._draw_point(frame, point)
-        for bbox in frame.bboxes:
-            self._draw_bbox(bbox)
-        if cnt is not None:
-            cv2.putText(frame.data, "counter : " + str(cnt), (200, 250),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (50, 170, 50), 2)
-        cv2.imshow(win, frame.data)
-        cv2.waitKey(0)
-
-    def _draw_point(self, frame, point, p=2):
+    def draw_point(self, frame, point, p=2):
         r, j, c = point
         x, y = self._convert_coord(r, j, self.rmax)
         yt, yd, xl, xr = self._gen_rect_by_point(x, y, p)
 
-        if c == 'white':
+        if c is 'white':
             frame.data[yt:yd, xl:xr] = 255
-        elif c == 'red':
-            frame.data[yt:yd, xl:xr, 2] = 224
         else:
-            print("not supported!")
+            frame.data[yt:yd, xl:xr, 1] = 0
+            frame.data[yt:yd, xl:xr, 2] = 224
+            frame.data[yt:yd, xl:xr, 0] = 0
 
     def _convert_coord(self, r, j, rmax=1):
         theta = j * np.pi / 2 / 250
@@ -68,16 +56,16 @@ class FrameHelper:
         y = int(self.h * r * np.sin(theta) // rmax)
         return x, y
 
-    def _draw_bbox(self, frame, bbox):
-        p1, p2, c = bbox
-        cv2.rectangle(frame.data, p1, p2, c, 2, 1)
-
     def _gen_rect_by_point(self, x, y, p=2):
         xl = x - p if x - p >= 0 else 0
         xr = x + p if x + p < self.w else self.w - 1
         yd = y + p if y + p < self.h else self.h - 1
         yt = y - p if y - p >= 0 else 0
         return yt, yd, xl, xr
+
+    def draw_bbox(self, frame, bbox):
+        p1, p2, c = bbox
+        cv2.rectangle(frame.data, p1, p2, c, 2, 1)
 
     def write(self):
         self.Writer.write(self.frame.data)
@@ -119,8 +107,12 @@ class Frame:
         self.dpoints = []
         self.spoints = []
 
-    def append_point(self, r, j, color="white"):
-        point = (r, j, color)
+    def append_dpoint(self, r, j, c='red'):
+        point = (r, j, c)
+        self.dpoints.append(point)
+
+    def append_point(self, r, j, c='white'):
+        point = (r, j, c)
         self.points.append(point)
 
     def append_bbox(self, bbox, color="blue"):
@@ -145,12 +137,20 @@ class Frame:
 
 
 class BackGround:
-    def __init__(self, data, len=10):
-        self.data = data
-        self.len = len
-
-    def reset(self, data=None):
-        self.data = [[] for _ in range(250)]
+    def __init__(self, data, N=10, R=1000, min=5):
+        data = np.pad(data, 1, "symmetric")
+        len = data.shape[0]
+        bg = np.zeros([len, N])
+        for i in range(1, len - 1):
+            for n in range(N):
+                x = np.random.randint(-1, 2)
+                r = i + x
+                bg[i, n] = data[r]
+        bg = bg[1: len - 1]
+        self.N = N
+        self.R = R
+        self.min = min
+        self.data = bg
 
     def enqueue(self, r, i):
         # allow repeatness
