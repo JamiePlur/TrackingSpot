@@ -57,7 +57,7 @@ class InitialState(State):
                 frame.append_point(r, i)
         for point in frame.points:
             fh.draw_point(frame, point)
-        cv2.imshow('test bg', frame.data)
+        # cv2.imshow('test bg', frame.data)
 
     def init_bg(self, data):
         std = np.std(data, axis=1)
@@ -90,10 +90,44 @@ class NormalState(State):
     def __init__(self, count_machine):
         super().__init__(count_machine)
         self.abnormal_frame_in_row = 0
+        self.counter = Counter(self.frame_helper)
 
     def update(self):
         s = "normal"
-        # append dpoints
+        self._append_dpoint()
+        # check abnormal frame
+        normal = self._check_abnormal_frame()
+        if not normal:
+            self.abnormal_frame_in_row += 1
+            s = "abnormal"
+        else:
+            self.abnormal_frame_in_row = 0
+        if self.abnormal_frame_in_row >= 10:
+            # change to initial state
+            cm = self.count_machine
+            print("convert to initial state")
+            cm.change_state(cm.initial_state)
+            cm.state.reset()
+        return s
+
+    def handle(self):
+        self._updata_bg()
+        # detect new objs
+        self._detect()
+        # track existing objs, if lose, count
+        cnt = self._track()
+        return cnt
+
+    def _detect(self):
+        frame = self.frame_helper.frame
+        self.counter.detect(frame)
+
+    def _track(self):
+        frame = self.frame_helper.frame
+        cnt = self.counter.track(frame)
+        return cnt
+
+    def _append_dpoint(self):
         points = self.frame_helper.frame.points
         bg_data = self.frame_helper.bg.data
         N = self.frame_helper.bg.N
@@ -108,51 +142,29 @@ class NormalState(State):
                 index += 1
             if count < min:
                 self.frame_helper.frame.append_dpoint(points[i][0], i)
-        # check abnormal frame
+
+    def _check_abnormal_frame(self):
+        if self.frame_helper.last_normal_frame is None:
+            self.frame_helper.last_normal_frame = self.frame_helper.frame
         dp_num = self.frame_helper.frame.dynamic_point_num()
-        last_dp_num = self.frame_helper.last_frame.dynamic_point_num()
-        print("dp diff:", dp_num - last_dp_num)
-        if dp_num - last_dp_num > 35:
-            self.abnormal_frame_in_row += 1
-            s = "abnormal"
+        last_dp_num = self.frame_helper.last_normal_frame.dynamic_point_num()
+
+        dp = self.frame_helper.frame.dpoints
+        dp = [dp[x][0] for x in range(len(dp))]
+        dp_std = np.array(dp).std()
+
+        if dp_num - last_dp_num > 50 or dp_std > 5000:
+            return False
         else:
-            self.abnormal_frame_in_row = 0
-        if self.abnormal_frame_in_row >= 5:
-            # change to initial state
-            cm = self.count_machine
-            cm.change_state(cm.initial_state)
-            print("convert to initial state")
-        return s
+            self.frame_helper.last_normal_frame = self.frame_helper.frame
+            return True
 
-    def handle(self):
-        self.updata_bg()
-        return 0
-
-    def updata_bg(self):
+    def _updata_bg(self):
         fh = self.frame_helper
-        bg_data = fh.bg.data
-        N = fh.bg.N
         points = fh.frame.points
         dpoints = fh.frame.dpoints
         dp_ind = [dpoints[x][1] for x in range(len(dpoints))]
-
-        for i in range(len(points)):
-            # if not dpoint
-            if i not in dp_ind:
-                # 1/2 odds to update this point
-                p = np.random.randint(0, 2)
-                if p == 0:
-                    r = np.random.randint(0, N)
-                    bg_data[i, r] = points[i][0]
-                p = np.random.randint(0, 5)
-                # 1/3 odds t0 update near point
-                if p == 0:
-                    x = np.random.randint(-1, 2)
-                    r = np.random.randint(0, N)
-                    try:
-                        bg_data[i + x, r] = points[i][0]
-                    except:
-                        pass
+        bg_data = fh.bg.update(points, dp_ind)
         self.test_bg(np.median(bg_data, axis=1), dp_ind)
 
     def test_bg(self, data, dp_ind=None):
@@ -165,13 +177,13 @@ class NormalState(State):
                 frame.append_point(r, i)
         for point in frame.points:
             fh.draw_point(frame, point)
-        cv2.imshow('test bg', frame.data)
+        # cv2.imshow('test bg', frame.data)
 
 
 class CountingMachine:
 
-    def __init__(self, dir):
-        self.fh = FrameHelper(dir)
+    def __init__(self, dirs):
+        self.fh = FrameHelper(dirs)
         self.initial_state = InitialState(self)
         self.normal_state = NormalState(self)
         self.state = self.initial_state
@@ -199,18 +211,16 @@ class CountingMachine:
         self.fh.close()
 
     def display(self, cnt=None, win='img'):
-        frame = copy.deepcopy(self.fh.frame)
-        for point in frame.points:
-            self.fh.draw_point(frame, point)
-        for dpoint in frame.dpoints:
-            self.fh.draw_point(frame, dpoint)
+        frame = self.fh.frame
+        # for dpoint in frame.dpoints:
+        #     self.fh.draw_point(frame, dpoint)
         for bbox in frame.bboxes:
-            self.fh.draw_bbox(bbox)
+            self.fh.draw_bbox(frame, bbox)
         if cnt is not None:
             cv2.putText(frame.data, "counter : " + str(cnt), (200, 250),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.75, (50, 170, 50), 2)
-        cv2.imshow(win, frame.data)
-        cv2.waitKey(0)
+        # cv2.imshow(win, frame.data)
+        # cv2.waitKey(0)
         print("th dp num of {}th frame is {}".format(
             self.fh.frame_ind, self.fh.frame.dynamic_point_num()))
 
@@ -220,9 +230,15 @@ class CountingMachine:
 
 if __name__ == '__main__':
     import os
-    ind = 22
-    dirs = os.listdir("data")
-    dir = os.path.join("data", dirs[ind])
-    ce = CountingMachine(dir)
-    ce.run()
-    
+#    inds = [22]
+#    list_dirs = os.listdir("data")
+#    dirs = []
+#    for i in inds:
+#        dir = os.path.join("data", list_dirs[i])
+#        dirs.append(dir)
+
+    dirs = []
+    dir = os.path.join("data", 'exit.npy')
+    dirs.append(dir)
+    ce = CountingMachine(dirs)
+    ce.run(save=True)

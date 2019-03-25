@@ -1,24 +1,28 @@
-import numpy as np
 import cv2
-import imutils
+import numpy as np
 from cv2 import VideoWriter, VideoWriter_fourcc
-import copy
+import imutils
 
 
 class FrameHelper:
 
-    def __init__(self, dir, w=500, h=500, fps=25):
-        data = np.load(dir)
+    def __init__(self, dirs, w=500, h=500, fps=25):
+        data = np.load(dirs[0])
+        for i in range(1, len(dirs)):
+            append_data = np.load(dirs[i])
+            data = np.vstack([data, append_data])
         self.rmax = max(data[:, 0])
         self.frame_ind = 0
         self.frame_num = data.shape[0] // 250
+        self.last_normal_frame = None
+        self.frame = None
         self.data = data[:, 0]
         self.w = w
         self.h = h
 
         fourcc = VideoWriter_fourcc(*"MJPG")
-        self.Writer = cv2.VideoWriter(dir + "_count.avi", fourcc,
-                                      fps, (500, 500))
+        self.Writer = VideoWriter(dirs[0] + "_count.avi", fourcc,
+                                  fps, (500, 500))
 
     def read(self):
         if self.frame_ind >= self.frame_num:
@@ -30,9 +34,12 @@ class FrameHelper:
             r = self.data[offset]
             frame.append_point(r, j)
 
-        self.last_frame = frame if self.frame_ind is 0 else self.frame
+#        self.last_frame = frame if self.frame_ind is 0 else self.frame
         self.frame = frame
         self.frame_ind += 1
+
+        for point in self.frame.points:
+            self.draw_point(self.frame, point)
         return True, self.frame
 
     def init_bg(self, data):
@@ -125,13 +132,13 @@ class Frame:
         p2 = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3]))
         self.bboxes.append((p1, p2, c))
 
-    def clip_bbox(self, bbox):
+    def clip_bbox(self, bbox, p=0):
         xl = int(bbox[0]) if int(bbox[0]) > 0 else 0
         yt = int(bbox[1]) if int(bbox[1]) > 0 else 0
         xr = int(bbox[0] +
-                 bbox[2]) if int(bbox[0] + bbox[2]) <= self.w else self.w
+                 bbox[2]) if int(bbox[0] + bbox[2]) <= self.w-p else self.w-p
         yd = int(bbox[1] +
-                 bbox[3]) if int(bbox[1] + bbox[3]) <= self.h else self.h
+                 bbox[3]) if int(bbox[1] + bbox[3]) <= self.h-p else self.h-p
         c = self.data[yt:yd, xl:xr]
         return c
 
@@ -152,9 +159,30 @@ class BackGround:
         self.min = min
         self.data = bg
 
-    def enqueue(self, r, i):
-        # allow repeatness
-        # if r not in self.data[i]:
-        self.data[i].append(r)
-        if len(self.data[i]) > self.len:
-            self.data[i].pop(0)
+    def update(self, points, dp_ind):
+        for i in range(len(points)):
+            # if not dpoint
+            if i not in dp_ind:
+                # 1/N odds to update this point
+                p = np.random.randint(0, self.N)
+                if p == 0:
+                    r = np.random.randint(0, self.N)
+                    self.data[i, r] = points[i][0]
+                p = np.random.randint(0, self.N)
+                # 1/N odds to update near point
+                if p == 0:
+                    x = np.random.randint(-1, 2)
+                    r = np.random.randint(0, self.N)
+                    try:
+                        self.data[i + x, r] = points[i][0]
+                    except:
+                        pass
+        return self.data
+
+    def revised_by_tracking(self, obj, points):
+        x, y, w, h = obj.bbox
+        j_start = int(np.arctan(y/(x+w))*250*2/np.pi)
+        j_end = int(np.arctan((y+h)/x)*250*2/np.pi)
+        print("j range:{}-{}".format(j_start, j_end))
+        for j in range(j_start, j_end+1):
+            self.data[j, 5:] = points[j][0]
