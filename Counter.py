@@ -88,7 +88,7 @@ class Counter():
         for b in f.bboxes:
             self.frame_helper.draw_bbox(f, b)
 
-        # cv2.imshow("roi", f.data)
+        cv2.imshow("roi", f.data)
         return bboxes
 
     def _filter(self, bboxes, frame):
