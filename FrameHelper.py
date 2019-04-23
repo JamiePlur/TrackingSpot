@@ -4,6 +4,32 @@ from cv2 import VideoWriter, VideoWriter_fourcc
 import imutils
 
 
+def convert_coord(r, j, rmax=1):
+    theta = j * np.pi / 2 / 250
+    x = int(500 * r * np.cos(theta) // rmax)
+    y = int(500 * r * np.sin(theta) // rmax)
+    return x, y
+
+
+def gen_rect_by_point(x, y, w=500, h=500, p=2):
+    xl = x - p if x - p >= 0 else 0
+    xr = x + p if x + p < w else w - 1
+    yd = y + p if y + p < h else h - 1
+    yt = y - p if y - p >= 0 else 0
+    return yt, yd, xl, xr
+
+
+def draw_point(frame, x, y, c='white', p=2):
+    yt, yd, xl, xr = gen_rect_by_point(x, y, frame.w, frame.h, p)
+
+    if c is 'white':
+        frame.data[yt:yd, xl:xr] = 255
+    else:
+        frame.data[yt:yd, xl:xr, 1] = 0
+        frame.data[yt:yd, xl:xr, 2] = 224
+        frame.data[yt:yd, xl:xr, 0] = 0
+
+
 class FrameHelper:
 
     def __init__(self, dirs, w=500, h=500, fps=25):
@@ -43,7 +69,7 @@ class FrameHelper:
         return True, self.frame
 
     def init_bg(self, data):
-        self.bg = BackGround(data)
+        self.bg = PolyBackGround(data)
 
     def draw_point(self, frame, point, p=2):
         r, j, c = point
@@ -143,7 +169,12 @@ class Frame:
         return c
 
 
-class BackGround:
+class PolyBackGround:
+    def __init__(self, data):
+        self.data = np.reshape(data, [1, -1, 2])
+
+
+class VibeBackGround:
     def __init__(self, data, N=10, R=1000, min=5):
         data = np.pad(data, 1, "symmetric")
         len = data.shape[0]

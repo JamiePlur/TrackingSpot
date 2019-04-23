@@ -5,6 +5,7 @@ import numpy as np
 
 from Counter import Counter
 from FrameHelper import Frame, FrameHelper
+import FrameHelper as framehelper
 
 
 class State:
@@ -21,7 +22,7 @@ class InitialState(State):
         self.reset(l)
         self.bg_init_data = [[] for _ in range(250)]
 
-    def reset(self, l=5):
+    def reset(self, l=10):
         self.bg_init_data = [[] for _ in range(250)]
         self.l = l
 
@@ -44,45 +45,34 @@ class InitialState(State):
         if self.l is 0:
             data = self.init_bg(np.array(self.bg_init_data))
             fh.init_bg(data)
-
         return 0
 
-    def test_bg(self, data, dp_ind=None):
-        fh = self.frame_helper
+    def test_bg(self, data, convex, dp_ind=None):
         frame = Frame(500, 500)
-        for i, r in enumerate(data):
-            if dp_ind is not None and i in dp_ind:
-                frame.append_point(r, i, 'red')
-            else:
-                frame.append_point(r, i)
-        for point in frame.points:
-            fh.draw_point(frame, point)
+        for d in data:
+            x, y = d
+            framehelper.draw_point(frame, x, y)
+        convex = np.reshape(convex, [1, -1, 2])
+        cv2.drawContours(frame.data, convex, -1, (0, 0, 255), 10)
         # cv2.imshow('test bg', frame.data)
 
     def init_bg(self, data):
+        sps = []
+        # detect sp by std
         std = np.std(data, axis=1)
-        # detect dp
-        dp_ind = np.where(std > 50)[0].tolist()
+        sp_inds = np.where(std < 50)[0]
+        # collect sp
+        rmax = max(data[:, 0])
         data = np.median(data, axis=1)
-
-        if len(dp_ind) is 250:
-            dp_ind.pop()
-        while(len(dp_ind) > 0):
-            for ind in dp_ind:
-                sign = 1 if np.random.randint(0, 2) > 0 else -1
-                if ind + 1*sign < 250 and ind + 1*sign not in dp_ind:
-                    # find the nearest sp for each dp
-                    # change the value of dp with sp + grad
-                    if ind + 2*sign < 250 and ind + 2*sign not in dp_ind:
-                        grad = data[ind + 1*sign] - data[ind + 2*sign]
-                        data[ind] = data[ind + 1*sign] + grad \
-                            if abs(grad) < 100 else data[ind + 1*sign]
-                    else:
-                        data[ind] = data[ind + 1*sign]
-                    dp_ind.remove(ind)
-                    break
-        self.test_bg(data)
-        return data
+        for sp_ind in sp_inds:
+            x, y = framehelper.convert_coord(data[sp_ind], sp_ind, rmax)
+            sps.append((max(x - 30, 0), max(y - 30, 0)))
+        # gen convex
+        c = np.array([sps])
+        epsilon = 0.01 * cv2.arcLength(c, True)
+        convex = cv2.convexHull(c, epsilon, True)
+        self.test_bg(sps, convex)
+        return convex
 
 
 class NormalState(State):
@@ -94,110 +84,28 @@ class NormalState(State):
 
     def update(self):
         s = "normal"
-        self._append_dpoint()
-        # check abnormal frame
-        normal = self._check_abnormal_frame()
-        if not normal:
-            self.abnormal_frame_in_row += 1
-            s = "abnormal"
-        else:
-            self.abnormal_frame_in_row = 0
-        if self.abnormal_frame_in_row >= 10:
-            # change to initial state
-            cm = self.count_machine
-            print("convert to initial state")
-            cm.change_state(cm.initial_state)
-            cm.state.reset()
         return s
 
     def handle(self):
         self._updata_bg()
         # detect new objs
-        self._detect()
+        self.detect()
         # track existing objs, if lose, count
-        cnt = self._track()
+        cnt = self.track()
         return cnt
 
-    def _detect(self):
+    def detect(self):
         frame = self.frame_helper.frame
-        self.counter.detect(frame)
+        roi_frame = self.counter.detect(frame)
+        return roi_frame
 
-    def _track(self):
+    def track(self):
         frame = self.frame_helper.frame
         cnt = self.counter.track(frame)
         return cnt
 
-    def _append_dpoint(self):
-        points = self.frame_helper.frame.points
-        bg_data = self.frame_helper.bg.data
-        N = self.frame_helper.bg.N
-        R = self.frame_helper.bg.R
-        min = self.frame_helper.bg.min
-        for i in range(len(points)):
-            count, index = 0, 0
-            while count < min and index < N:
-                d = np.abs(points[i][0] - bg_data[i, index])
-                if d < R:
-                    count += 1
-                index += 1
-            if count < min:
-                self.frame_helper.frame.append_dpoint(points[i][0], i)
-
-    def _check_abnormal_frame(self):
-        if self.frame_helper.last_normal_frame is None:
-            self.frame_helper.last_normal_frame = self.frame_helper.frame
-        dp_num = self.frame_helper.frame.dynamic_point_num()
-        last_dp_num = self.frame_helper.last_normal_frame.dynamic_point_num()
-
-        dp = self.frame_helper.frame.dpoints
-        dp = [dp[x][0] for x in range(len(dp))]
-        dp_std = np.array(dp).std()
-
-        if dp_num - last_dp_num > 50 or dp_std > 5000:
-            return False
-        else:
-            self.frame_helper.last_normal_frame = self.frame_helper.frame
-            return True
-
     def _updata_bg(self):
-        fh = self.frame_helper
-        points = fh.frame.points
-        dpoints = fh.frame.dpoints
-        dp_ind = [dpoints[x][1] for x in range(len(dpoints))]
-        bg_data = fh.bg.update(points, dp_ind)
-        self.test_bg(np.median(bg_data, axis=1), dp_ind)
-
-    def test_bg(self, data, dp_ind=None):
-        fh = self.frame_helper
-        frame = Frame(500, 500)
-        for i, r in enumerate(data):
-            if dp_ind is not None and i in dp_ind:
-                frame.append_point(r, i, 'red')
-            else:
-                frame.append_point(r, i)
-        for point in frame.points:
-            fh.draw_point(frame, point)
-
-        bg = frame.data
-        edges = cv2.cvtColor(bg, cv2.COLOR_BGR2GRAY)
-        # edges = cv2.Canny(frame.data, 50, 150, apertureSize=3)
-        lines = cv2.HoughLines(edges, 2, np.pi/180, 20)
-        if lines is not None:
-            for line in lines[0]:
-                rho = line[0]
-                theta = line[1]
-                if (theta < (np.pi/4)) or (theta > (3.*np.pi/4.0)):
-                    pt1 = (int(rho/np.cos(theta)), 0)
-                    pt2 = (int((rho-bg.shape[0]*np.sin(theta))/np.cos(theta)), bg.shape[0])
-                    cv2.line(bg, pt1, pt2, (255))
-                else:
-                    pt1 = (0, int(rho/np.sin(theta)))
-                    pt2 = (bg.shape[1], int((rho-bg.shape[1]*np.cos(theta))/np.sin(theta)))
-                    cv2.line(bg, pt1, pt2, (255), 1)
-        else:
-            print("no line detected! ")
-
-        cv2.imshow('test bg', frame.data)
+        pass
 
 
 class CountingMachine:
@@ -221,9 +129,10 @@ class CountingMachine:
                 continue
 
             self.cnt += self.state.handle()
-
+            print("count num:", self.cnt)
             if display:
-                self.display(self.cnt)
+                if s is not 'init':
+                    self.display(self.cnt)
 
             if save:
                 self.fh.write()
@@ -239,10 +148,11 @@ class CountingMachine:
         if cnt is not None:
             cv2.putText(frame.data, "counter : " + str(cnt), (200, 250),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.75, (50, 170, 50), 2)
+        # cv2.drawContours(frame.data, self.fh.bg.data, -1, (0, 0, 255), 10)
         cv2.imshow(win, frame.data)
         cv2.waitKey(0)
-        print("th dp num of {}th frame is {}".format(
-            self.fh.frame_ind, self.fh.frame.dynamic_point_num()))
+        # print("th dp num of {}th frame is {}".format(
+        #     self.fh.frame_ind, self.fh.frame.dynamic_point_num()))
 
     def change_state(self, state):
         self.state = state
@@ -261,4 +171,4 @@ if __name__ == '__main__':
     dir = os.path.join("data", 'exit.npy')
     dirs.append(dir)
     ce = CountingMachine(dirs)
-    ce.run(save=False)
+    ce.run(save=True)

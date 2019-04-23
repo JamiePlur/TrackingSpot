@@ -4,29 +4,119 @@ import cv2
 import imutils
 import copy
 from FrameHelper import Frame
+import FrameHelper
+
+# kernel for erode and dilate operation
+UpDownkernel = np.array(
+    [[0, 1, 1, 1, 0], [0, 1, 1, 1, 0], [0, 1, 1, 1, 0], [0, 1, 1, 1, 0],
+     [0, 1, 1, 1, 0]],
+    dtype='uint8')
+
+Rectkernel = np.array([[1, 1, 1], [1, 1, 1], [1, 1, 1]], dtype='uint8')
 
 
 class Counter():
-
     def __init__(self, fh):
         self.objs = []
-        self.frame_helper = fh
+        self.track_roi = []
+        self.detect_roi = []
+        self.fh = fh
 
     def detect(self, frame):
-        # delete edge:
-        bboxes = self._detect_bboxes_by_dp(frame)
-        bboxes = self._filter(bboxes, frame)
+        # delete edge
+        bboxes = self.detect_bbox(frame)
+        # bboxes = self._detect_bboxes_by_dp(frame)
+        bboxes = self.bbox_filter(bboxes, frame)
         for bbox in bboxes:
-            obj = TrackedObj(bbox, frame)
+            obj = TrackedObj(bbox, self.track_roi)
             self.objs.append(obj)
         # print("all objects：", [obj.bbox for obj in self.objs])
 
+    def detect_bbox(self, frame):
+        bboxes = []
+        f = copy.deepcopy(frame)
+        f.reset()
+        for point in frame.points:
+            r, j, _ = point
+            x, y = FrameHelper.convert_coord(r, j, self.fh.rmax)
+            dist = cv2.pointPolygonTest(self.fh.bg.data, (x, y), True)
+            if dist < 20 and x > 20:  # outside roi
+                continue
+            else:  # inside roi
+                cv2.circle(f.data, (x, y), 4, [255, 255, 255], -1)
+
+        self.track_roi = copy.deepcopy(f)  # save track roi
+
+        f.data = cv2.erode(f.data, Rectkernel, iterations=3)
+        f.data = cv2.dilate(f.data, UpDownkernel, iterations=5)
+
+        def grab_contours(data):
+            gray = cv2.cvtColor(data, cv2.COLOR_BGR2GRAY)
+            ret, thresh = cv2.threshold(gray, 127, 255, 0)
+            cnts = cv2.findContours(thresh, cv2.RETR_TREE,
+                                    cv2.CHAIN_APPROX_SIMPLE)
+            cnts = imutils.grab_contours(cnts)
+            return cnts
+
+        def has_large_bbox(cnts):
+            for c in cnts:
+                bbox = cv2.boundingRect(c)
+                x, y, w, h = bbox
+                if w > 50 or h > 50:
+                    return True
+            return False
+
+        cnts = grab_contours(f.data)
+        while (has_large_bbox(cnts)):
+            f.data = cv2.erode(f.data, Rectkernel, iterations=1)
+            cnts = grab_contours(f.data)
+
+        for c in cnts:
+            bbox = cv2.boundingRect(c)
+            x, y, w, h = bbox
+            if w < 5 or h < 5 or y > 150:  # leaving zone
+                print("not detect small obj {}".format(bbox))
+                f.data[y:y + h, x:x + w, :] = 0
+                pass
+            else:
+                f.append_bbox(bbox)
+                bboxes.append(bbox)
+
+        for b in f.bboxes:
+            self.fh.draw_bbox(f, b)
+
+        # cv2.drawContours(f.data, self.fh.bg.data, -1, (0, 0, 255), 10)
+        cv2.imshow("detect_roi", f.data)
+        cv2.imshow("track_roi", self.track_roi.data)
+        return bboxes
+
+    def bbox_filter(self, bboxes, frame):
+        b = []
+        for bbox in bboxes:
+            ok = True
+            # filter by shape
+            # data = frame.clip_bbox(bbox)
+            # f = Frame(data=data)
+            # c = self._filter_by_shape(f)
+            # if len(c) is not 2:
+            #     ok = False
+            #     continue
+            # if repeat with exsiting obj:
+            # remain the detecting obj
+            # remove the tracked obj
+            for obj in self.objs:
+                qbox = obj.bbox
+                if self.bbox_overlap(bbox, qbox) > 0.5:
+                    self.objs.remove(obj)
+            if ok:
+                b.append(bbox)
+        return b
+
     def _filter_by_shape(self, f):
         bboxes = []
-
         f.data = imutils.resize(f.data, width=500)
         # first erode then dilate
-        # to remoce small noise
+        # to remove small noise
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         d = cv2.erode(f.data, kernel, iterations=7)
         # d = cv2.dilate(d, kernel, iterations= 1)
@@ -34,8 +124,7 @@ class Counter():
         # convert to binary img
         # and find contours
         ret, thresh = cv2.threshold(d, 127, 255, 0)
-        fcnts = cv2.findContours(d, cv2.RETR_TREE,
-                                 cv2.CHAIN_APPROX_SIMPLE)
+        fcnts = cv2.findContours(d, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         fcnts = imutils.grab_contours(fcnts)
 
         for c in fcnts:
@@ -46,10 +135,6 @@ class Counter():
             if self._bbox_out_of_bound(bbox, 500):
                 continue
             bboxes.append(bbox)
-
-        # print("number of cnts:",len(bboxes))
-        # f.show()
-
         return bboxes
 
     def _bbox_out_of_bound(self, bbox, bound):
@@ -60,72 +145,10 @@ class Counter():
             return True
         return False
 
-    def _detect_bboxes_by_dp(self, frame):
-        bboxes = []
-
-        f = copy.deepcopy(frame)
-        f.reset()
-        for dp in frame.dpoints:
-            r, j, _ = dp
-            f.append_point(r, j)
-        for point in f.points:
-            self.frame_helper.draw_point(f, point)
-
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        f.data = cv2.dilate(f.data, kernel, iterations=4)
-        f.data = cv2.erode(f.data, kernel, iterations=2)
-
-        gray = cv2.cvtColor(f.data, cv2.COLOR_BGR2GRAY)
-        ret, thresh = cv2.threshold(gray, 127, 255, 0)
-        cnts = cv2.findContours(thresh, cv2.RETR_TREE,
-                                cv2.CHAIN_APPROX_SIMPLE)
-        cnts = imutils.grab_contours(cnts)
-        for c in cnts:
-            bbox = cv2.boundingRect(c)
-            f.append_bbox(bbox)
-            bboxes.append(bbox)
-
-        for b in f.bboxes:
-            self.frame_helper.draw_bbox(f, b)
-
-        cv2.imshow("roi", f.data)
-        return bboxes
-
-    def _filter(self, bboxes, frame):
-        b = []
-        for bbox in bboxes:
-            ok = True
-            for obj in self.objs:
-                qbox = obj.bbox
-                if self.bbox_overlap(bbox, qbox) > 0.5:
-                    ok = False
-                    break
-            # filter by size
-            x, y, w, h = bbox
-            if w < 10 or h < 10:
-                ok = False
-            if w > 80 and h > 80:
-                ok = False
-            if h/w < 1:
-                ok = False
-            # filter by shape
-            data = frame.clip_bbox(bbox)
-            f = Frame(data=data)
-            c = self._filter_by_shape(f)
-            if len(c) is not 2:
-                ok = False
-            # filter by positon
-            x1, y1, x2, y2 = x, y, x+w, y+h
-            if y1 < 50 or y2 > 370:
-                ok = False
-            if ok:
-                b.append(bbox)
-        return b
-
     def track(self, frame):
         leaving_objs = []
         for i, obj in enumerate(self.objs):
-            ok = obj.update(frame)
+            ok = obj.update(self.track_roi)
             if ok:
                 if self._is_bbox_leaving(obj):
                     print("obj {} is acutually leaving".format(obj.bbox))
@@ -141,19 +164,12 @@ class Counter():
                 self.objs.remove(obj)
 
             if ok:
-                if self._is_bbox_like_bg(obj):
-                    print("obj {} is deleted for liking bg".format(obj.bbox))
-                    self.objs.remove(obj)
-                    points = self.frame_helper.frame.points
-                    self.frame_helper.bg.revised_by_tracking(obj, points)
-                    continue
-
-                if self._is_bbox_not_move(obj):
-                    print("obj {} is deleted for not moving".format(obj.bbox))
-                    self.objs.remove(obj)
-                    points = self.frame_helper.frame.points
-                    self.frame_helper.bg.revised_by_tracking(obj, points)
-                    continue
+                # if self._is_bbox_not_move(obj):
+                #     print("obj {} is deleted for not moving".format(obj.bbox))
+                #     self.objs.remove(obj)
+                #     # points = self.fh.frame.points
+                #     # self.fh.bg.revised_by_tracking(obj, points)
+                #     continue
 
                 if self._is_bbox_repeated(obj):
                     print("obj {} is deleted for repeatness".format(obj.bbox))
@@ -170,26 +186,34 @@ class Counter():
 
     def _is_bbox_leaving(self, obj):
         x, y, w, h = obj.bbox
-        # start_position = (x+w/2, y+h/2)
-        if y < 0 or y > 450:
+        if y > 200:  # leaving zone
             return True
         else:
             return False
 
     def _is_bbox_repeated(self, obj):
-        for qobj in [o for o in self.objs if o is not obj]:
-            overlap = self.bbox_overlap(obj.bbox, qobj.bbox)
-            if overlap > 0.7:
-                return True
+        x, y, w, h = obj.bbox
+        max_overlap = 0
+        if y < 150:  # if y not in leaving zone
+            for qobj in [o for o in self.objs if o is not obj]:
+                overlap = self.bbox_overlap(obj.bbox, qobj.bbox)
+                max_overlap = max(max_overlap, overlap)
+                if overlap > 0.7:
+                    return True
+        # test overlap
+        # print('max_overlap:', max_overlap)
         return False
 
     def _is_bbox_not_leave(self, obj):
         x, y, w, h = obj.bbox
-        if obj.travel_distance < 10:
-            print("too short!")
-            return True
-        y1, y2 = y, y+h
-        if y1 > 50 and y2 < 200:
+        # # travel distance should larger than d
+        # if obj.travel_distance < 10:
+        #     print("too short!")
+        #     return True
+
+        # leaving area should in accord with
+        # travel direction
+        if y < 150:  # if obj not in leaving zone
             print("position wrong!")
             return True
         return False
@@ -198,50 +222,23 @@ class Counter():
         if obj.life < 10:
             return False
         else:
-            print("obj speed:", obj.travel_distance / obj.life)
+            # print("obj speed:", obj.travel_distance / obj.life)
             if obj.travel_distance / obj.life < 0.5:
                 return True
             else:
                 return False
 
-    def _is_bbox_like_bg(self, obj):
-        x, y, w, h = obj.bbox
-        if w > 40 or h > 40:
-            return True
-
-        # j_start = int(np.arctan(y/(x+w))*250*2/np.pi)
-        # j_end = int(np.arctan((y+h)/x)*250*2/np.pi)
-        # dpoints = self.frame_helper.frame.dpoints
-        # dp_ind = [dpoints[x][1] for x in range(len(dpoints))]
-
-        # ok = False
-        # for j in range(j_start, j_end+1):
-        #     if j in dp_ind:
-        #         ok = True
-        #         break
-        # if not ok:
-        #     print("not include dp!")
-        #     return True
-
-        return False
-
     def bbox_overlap(self, box, query_box):
         overlap = 0
         box_area = box[2] * box[3]
         query_box_area = query_box[2] * query_box[3]
-        iw = (
-            min(box[0] + box[2], query_box[0] + query_box[2]) -
-            max(box[0], query_box[0]) 
-        )
+        iw = (min(box[0] + box[2], query_box[0] + query_box[2]) - max(
+            box[0], query_box[0]))
         if iw > 0:
-            ih = (
-                min(box[1] + box[3], query_box[1] + query_box[3]) -
-                max(box[1], query_box[1]) 
-            )
+            ih = (min(box[1] + box[3], query_box[1] + query_box[3]) - max(
+                box[1], query_box[1]))
             if ih > 0:
-                ua = float(
-                    min(query_box_area, box_area)
-                )
+                ua = float(min(query_box_area, box_area))
                 overlap = iw * ih / ua
         return overlap
 
@@ -254,7 +251,7 @@ class TrackedObj:
 
         self.travel_distance = 0
         x, y, w, h = bbox
-        self.start_position = (x+w/2, y+h/2)
+        self.start_position = (x + w / 2, y + h / 2)
         self.last_position = self.start_position
 
         self.life = 0
@@ -268,15 +265,7 @@ class TrackedObj:
         if ok:
             self.bbox = bbox
             x, y, w, h = bbox
-            present_position = (x+w/2, y+h/2)
-            # one_travel_distance = abs(self.last_position[0] - present_position[0])\
-            #     + abs(self.last_position[1] - present_position[1])
-            # self.last_position = present_position
-            # # print("the td of {} is {}:".format(bbox, one_travel_distance))
-            # if one_travel_distance < 1:
-            #     self.like_bg_counter += 1
-            # else:
-            #     self.like_bg_counter = 0
+            present_position = (x + w / 2, y + h / 2)
 
             self.travel_distance = abs(self.start_position[0] - present_position[0])\
                 + abs(self.start_position[1] - present_position[1])
