@@ -1,51 +1,50 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import cv2
 import imutils
 import copy
 from FrameHelper import Frame
-import FrameHelper
+import FrameHelper as fh
 
 # kernel for erode and dilate operation
 UpDownkernel = np.array(
-    [[0, 1, 1, 1, 0], [0, 1, 1, 1, 0], [0, 1, 1, 1, 0], [0, 1, 1, 1, 0],
-     [0, 1, 1, 1, 0]],
-    dtype='uint8')
+    [[0, 1, 1, 1, 0],
+     [0, 1, 1, 1, 0],
+     [0, 1, 1, 1, 0],
+     [0, 1, 1, 1, 0],
+     [0, 1, 1, 1, 0]], dtype='uint8')
 
-Rectkernel = np.array([[1, 1, 1], [1, 1, 1], [1, 1, 1]], dtype='uint8')
+Rectkernel = np.array([[1, 1, 1],
+                       [1, 1, 1],
+                       [1, 1, 1]], dtype='uint8')
 
 
 class Counter():
-    def __init__(self, fh):
+    def __init__(self, bg, direction=None):
         self.objs = []
         self.track_roi = []
         self.detect_roi = []
-        self.fh = fh
+        self.bg = bg
 
     def detect(self, frame):
-        # delete edge
         bboxes = self.detect_bbox(frame)
-        # bboxes = self._detect_bboxes_by_dp(frame)
         bboxes = self.bbox_filter(bboxes, frame)
         for bbox in bboxes:
             obj = TrackedObj(bbox, self.track_roi)
             self.objs.append(obj)
-        # print("all objects：", [obj.bbox for obj in self.objs])
 
     def detect_bbox(self, frame):
         bboxes = []
-        f = copy.deepcopy(frame)
-        f.reset()
+        f = Frame(frame.w, frame.h, frame.rmax)
         for point in frame.points:
-            r, j, _ = point
-            x, y = FrameHelper.convert_coord(r, j, self.fh.rmax)
-            dist = cv2.pointPolygonTest(self.fh.bg.data, (x, y), True)
+            r, j = point
+            x, y = fh.convert_coord(r, j, frame.rmax)
+            dist = cv2.pointPolygonTest(self.bg.roi, (x, y), True)
             if dist < 20 and x > 20:  # outside roi
                 continue
             else:  # inside roi
                 cv2.circle(f.data, (x, y), 4, [255, 255, 255], -1)
 
-        self.track_roi = copy.deepcopy(f)  # save track roi
+        self.track_roi = copy.deepcopy(f)
 
         f.data = cv2.erode(f.data, Rectkernel, iterations=3)
         f.data = cv2.dilate(f.data, UpDownkernel, iterations=5)
@@ -83,7 +82,7 @@ class Counter():
                 bboxes.append(bbox)
 
         for b in f.bboxes:
-            self.fh.draw_bbox(f, b)
+            fh.draw_bbox(f, b)
 
         # cv2.drawContours(f.data, self.fh.bg.data, -1, (0, 0, 255), 10)
         cv2.imshow("detect_roi", f.data)
@@ -94,16 +93,8 @@ class Counter():
         b = []
         for bbox in bboxes:
             ok = True
-            # filter by shape
-            # data = frame.clip_bbox(bbox)
-            # f = Frame(data=data)
-            # c = self._filter_by_shape(f)
-            # if len(c) is not 2:
-            #     ok = False
-            #     continue
-            # if repeat with exsiting obj:
-            # remain the detecting obj
-            # remove the tracked obj
+            # if new obj repeat with exsiting obj:
+            # remain the new obj, remove the old one
             for obj in self.objs:
                 qbox = obj.bbox
                 if self.bbox_overlap(bbox, qbox) > 0.5:
@@ -111,39 +102,6 @@ class Counter():
             if ok:
                 b.append(bbox)
         return b
-
-    def _filter_by_shape(self, f):
-        bboxes = []
-        f.data = imutils.resize(f.data, width=500)
-        # first erode then dilate
-        # to remove small noise
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        d = cv2.erode(f.data, kernel, iterations=7)
-        # d = cv2.dilate(d, kernel, iterations= 1)
-        d = cv2.cvtColor(d, cv2.COLOR_BGR2GRAY)
-        # convert to binary img
-        # and find contours
-        ret, thresh = cv2.threshold(d, 127, 255, 0)
-        fcnts = cv2.findContours(d, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        fcnts = imutils.grab_contours(fcnts)
-
-        for c in fcnts:
-            if cv2.contourArea(c) < 200:
-                continue
-            bbox = cv2.boundingRect(c)
-            # print(bbox)
-            if self._bbox_out_of_bound(bbox, 500):
-                continue
-            bboxes.append(bbox)
-        return bboxes
-
-    def _bbox_out_of_bound(self, bbox, bound):
-        if bbox[0] <= 0 or bbox[1] <= 0:
-            return True
-        if bbox[2] + bbox[0] >= bound \
-                or bbox[3] + bbox[1] >= bound:
-            return True
-        return False
 
     def track(self, frame):
         leaving_objs = []
@@ -175,7 +133,6 @@ class Counter():
                     print("obj {} is deleted for repeatness".format(obj.bbox))
                     self.objs.remove(obj)
                     continue
-                # print("obj {}, travel{}, life {}".format(obj.bbox, obj.travel_distance, obj.life))
 
         leaving_obj_num = len(leaving_objs)
         for obj in self.objs:
@@ -200,19 +157,10 @@ class Counter():
                 max_overlap = max(max_overlap, overlap)
                 if overlap > 0.7:
                     return True
-        # test overlap
-        # print('max_overlap:', max_overlap)
         return False
 
     def _is_bbox_not_leave(self, obj):
         x, y, w, h = obj.bbox
-        # # travel distance should larger than d
-        # if obj.travel_distance < 10:
-        #     print("too short!")
-        #     return True
-
-        # leaving area should in accord with
-        # travel direction
         if y < 150:  # if obj not in leaving zone
             print("position wrong!")
             return True
@@ -222,7 +170,6 @@ class Counter():
         if obj.life < 10:
             return False
         else:
-            # print("obj speed:", obj.travel_distance / obj.life)
             if obj.travel_distance / obj.life < 0.5:
                 return True
             else:
@@ -253,9 +200,8 @@ class TrackedObj:
         x, y, w, h = bbox
         self.start_position = (x + w / 2, y + h / 2)
         self.last_position = self.start_position
-
         self.life = 0
-        self.like_bg_counter = 0
+
         tracker = self.create_tracker()
         tracker.init(frame.data, bbox)
         self.tracker = tracker
@@ -267,7 +213,8 @@ class TrackedObj:
             x, y, w, h = bbox
             present_position = (x + w / 2, y + h / 2)
 
-            self.travel_distance = abs(self.start_position[0] - present_position[0])\
+            self.travel_distance = \
+                abs(self.start_position[0] - present_position[0])\
                 + abs(self.start_position[1] - present_position[1])
             self.life += 1
         return ok
